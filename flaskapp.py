@@ -57,6 +57,9 @@ import string
 
 # for start_static to get wan address
 import socket
+# for start_static to use https
+import ssl
+from pathlib import Path
 
 # 由 init.py 中的 uwsgi = False 或 True 決定在 uwsgi 模式或近端模式執行
 
@@ -592,11 +595,6 @@ def editorhead():
 
     return '''
     <br />
-<!--<script src="//cdn.tinymce.com/4/tinymce.min.js"></script>-->
-<!--<script src="/static/tinymce4/tinymce/tinymce.min.js"></script>-->
-<!-- for ipv6 to work -->
-<!-- <script src="https://mde.tw/cmstemplate/cmsimde/static/tinymce4/tinymce/tinymce.min.js"></script>-->
-<!-- may work for local, ipv4 and ipv6 editing -->
 <script src="/static/tinymce4/tinymce/tinymce.min.js"></script>
 <script src="/static/tinymce4/tinymce/plugins/sh4tinymce/plugin.min.js"></script>
 <link rel = "stylesheet" href = "/static/tinymce4/tinymce/plugins/sh4tinymce/style/style.css">
@@ -621,14 +619,6 @@ tinymce.init({
   file_picker_callback: function(callback, value, meta) {
         cmsFilePicker(callback, value, meta);
     },
-  templates: [
-    { title: 'Test template 1', content: 'Test 1' },
-    { title: 'Test template 2', content: 'Test 2' }
-  ],
-  content_css: [
-    '//fonts.googleapis.com/css?family=Lato:300,300i,400,400i',
-    '//www.tinymce.com/css/codepen.min.css'
-  ]
 });
 
 function cmsFilePicker(callback, value, meta) {
@@ -1091,6 +1081,8 @@ def get_page2(heading, head, edit, get_page_content = None):
 
     page = [w.replace('src="/images/', 'src="./../images/') for w in page]
     page = [w.replace('href="/downloads/', 'href="./../downloads/') for w in page]
+    # 配合 object 標註導入 svg data 來源的轉換
+    page = [w.replace('data="/images/', 'data="./../images/') for w in page]
     # 假如有 src="/static/ace/ 則換為 src="./../static/ace/
     page = [w.replace('src="/static/', 'src="./../cmsimde/static/') for w in page]
     # 假如有 src=/downloads 則換為 src=./../../downloads
@@ -2522,11 +2514,8 @@ def set_admin_css():
     """Set css for admin
     """
 
-    server_ip = get_wan_address() or 'localhost'
-    if "." in server_ip:
-        server_address = str(server_ip) + ":" + str(static_port)
-    else:
-        server_address = "[" + str(server_ip) + "]:" + str(static_port)
+    server_ip = 'localhost'
+    server_address = str(server_ip) + ":" + str(static_port)
 
     outstring = '''<!doctype html>
 <html><head>
@@ -2575,7 +2564,7 @@ window.location= 'https://' + location.host + location.pathname + location.searc
         outstring += '''
 <li><a href="/acpform">acp</a></li>
 <li><a href="/start_static/">SStatic</a></li>
-<li><a href="http://'''+ server_address + '''">''' + str(static_port) + '''</a></li>
+<li><a href="https://'''+ server_address + '''">''' + str(static_port) + '''</a></li>
 '''
     outstring += '''
 </ul>
@@ -2588,12 +2577,10 @@ def set_css():
 
     """Set css for dynamic site
     """
-
-    server_ip = get_wan_address() or 'localhost'
-    if "." in server_ip:
-        server_address = str(server_ip) + ":" + str(static_port)
-    else:
-        server_address = "[" + str(server_ip) + "]:" + str(static_port)
+    
+    # use https://localhost:static_port for static site after start_static starting
+    server_ip = 'localhost'
+    server_address = str(server_ip) + ":" + str(static_port)
 
     outstring = '''<!doctype html>
 <html><head>
@@ -2651,7 +2638,7 @@ window.location= 'https://' + location.host + location.pathname + location.searc
             outstring += '''
 <li><a href="/acpform">acp</a></li>
 <li><a href="/start_static/">SStatic</a></li>
-<li><a href="http://''' + server_address +'''">''' + str(static_port) + '''</a></li>
+<li><a href="https://''' + server_address +'''">''' + str(static_port) + '''</a></li>
 '''
     else:
         outstring += '''
@@ -2674,7 +2661,6 @@ def set_css2():
         <title>''' + init.Init.site_title + '''</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-        <link href="https://fonts.googleapis.com/css?family=Quicksand:300,400,500,700,900" rel="stylesheet">
         <link rel="stylesheet" href="./../cmsimde/static/chimper/fonts/icomoon/style.css">
         <link rel="stylesheet" href="./../cmsimde/static/chimper/css/bootstrap.min.css">
         <link rel="stylesheet" href="./../cmsimde/static/chimper/css/magnific-popup.css">
@@ -2883,31 +2869,51 @@ def ssavePage():
 
 @app.route('/start_static/')
 def start_static():
-    """Start local static server in http"""
+    """Start local static server in https"""
     
     if isAdmin():
-        server_address = get_wan_address() or 'localhost'
-        server_port = static_port
-
-        # Determine address family based on server_address
-        address_family = socket.AF_INET if ':' not in server_address else socket.AF_INET6
-
-        httpd = http.server.HTTPServer((server_address, server_port), http.server.SimpleHTTPRequestHandler, bind_and_activate=False)
-        httpd.socket = socket.socket(address_family, socket.SOCK_STREAM)
-        httpd.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        if address_family == socket.AF_INET6:
-            httpd.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            httpd.socket.bind((server_address, server_port, 0, 0))
-        else:
+        try:
+            server_address = 'localhost'
+            server_port = static_port
+            address_family = socket.AF_INET
+            
+            # 創建 SSL context
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(
+                certfile='cert.pem',
+                keyfile='key.pem'
+            )
+            
+            # 設定 HTTPS server
+            httpd = http.server.HTTPServer(
+                (server_address, server_port),
+                http.server.SimpleHTTPRequestHandler,
+                bind_and_activate=False
+            )
+            
+            # 創建 socket 並套用 SSL
+            httpd.socket = socket.socket(address_family, socket.SOCK_STREAM)
+            httpd.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            httpd.socket = ssl_context.wrap_socket(
+                httpd.socket,
+                server_side=True
+            )
+            
+            # 綁定並啟動 server
             httpd.socket.bind((server_address, server_port))
-
-        httpd.server_activate()
-        httpd.serve_forever()
+            httpd.server_activate()
+            
+            print(f"HTTPS Server started at https://{server_address}:{server_port}")
+            httpd.serve_forever()
+            
+        except ssl.SSLError as e:
+            print(f"SSL Error: {e}")
+            return "SSL configuration error", 500
+        except Exception as e:
+            print(f"Server Error: {e}")
+            return "Server error", 500
     else:
         return redirect("/login")
-
-
 def syntaxhighlight():
 
     """Return syntaxhighlight needed scripts
@@ -2927,6 +2933,7 @@ def syntaxhighlight():
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushPowerShell.js"></script>
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushLua.js"></script>
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushMojo.js"></script>
+<script type="text/javascript" src="/static/syntaxhighlighter/shBrushWbt.js"></script>
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushCpp.js"></script>
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushCss.js"></script>
 <script type="text/javascript" src="/static/syntaxhighlighter/shBrushCSharp.js"></script>
@@ -2971,6 +2978,7 @@ def syntaxhighlight2():
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushPowerShell.js"></script>
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushLua.js"></script>
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushMojo.js"></script>
+<script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushWbt.js"></script>
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushCpp.js"></script>
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushCss.js"></script>
 <script type="text/javascript" src="./../cmsimde/static/syntaxhighlighter/shBrushCSharp.js"></script>
